@@ -1,79 +1,95 @@
 'use strict';
 
-var gulp = require('gulp'),
-    changed = require('gulp-changed'),
-    sass = require('gulp-sass'),
-    csso = require('gulp-csso'),
-    autoprefixer = require('gulp-autoprefixer'),
-    browserify = require('browserify'),
-    watchify = require('watchify'),
-    source = require('vinyl-source-stream'),
-    buffer = require('vinyl-buffer'),
-    eslint = require('gulp-eslint'),
-    babelify = require('babelify'),
-    uglify = require('gulp-uglify'),
-    del = require('del'),
-    notify = require('gulp-notify'),
-    browserSync = require('browser-sync'),
-    sourcemaps = require('gulp-sourcemaps'),
-    reload = browserSync.reload,
-    p = {
+/**
+ * Module dependencies.
+ */
+var _ = require('lodash'),
+  argv = require('yargs').argv,
+  autoprefixer = require('gulp-autoprefixer'),
+  babelify = require('babelify'),
+  browserify = require('browserify'),
+  browserSync = require('browser-sync'),
+  buffer = require('vinyl-buffer'),
+  changed = require('gulp-changed'),
+  csso = require('gulp-csso'),
+  del = require('del'),
+  eslint = require('gulp-eslint'),
+  gulp = require('gulp'),
+  gulpif = require('gulp-if'),
+  notify = require('gulp-notify'),
+  reload = browserSync.reload,
+  runSequence = require('run-sequence'),
+  sass = require('gulp-sass'),
+  source = require('vinyl-source-stream'),
+  sourcemaps = require('gulp-sourcemaps'),
+  uglify = require('gulp-uglify'),
+  watchify = require('watchify');
+
+/**
+ * Config.
+ */ 
+var release = !!argv.release; 
+var paths = {
       jsx: './scripts/app.jsx',
       scss: 'styles/main.scss',
       bundle: 'app.js',
+      dist: 'dist',
       distJs: 'dist/js',
       distCss: 'dist/css'
-    };
+};
 
+/**
+ * Tasks.
+ */   
 gulp.task('clean', function(cb) {
-  del(['dist'], cb);
+  del([paths.dist], cb);
 });
 
-gulp.task('browserSync', function() {
+gulp.task('serve', function() {
   browserSync({
     server: {
       baseDir: './'
-    }
+    },
+    browser: ['firefox']
   });
 });
 
 gulp.task('watchify', function() {
-  var bundler = watchify(browserify(p.jsx, watchify.args));
-
-  function rebundle() {
-    return bundler
-      .bundle()
-      .on('error', notify.onError())
-      .pipe(source(p.bundle))
-      .pipe(gulp.dest(p.distJs))
-      .pipe(reload({stream: true}));
-  }
-
-  bundler.transform(babelify)
-  .on('update', rebundle);
-  return rebundle();
-});
-
-gulp.task('browserify', function() {
-  browserify(p.jsx)
-    .transform(babelify)
-    .bundle()
-    .pipe(source(p.bundle))
-    .pipe(buffer())
-    .pipe(sourcemaps.init({loadMaps: true}))
-    .pipe(uglify())
-    .pipe(sourcemaps.write('./'))
-    .pipe(gulp.dest(p.distJs));
+  var browserifyCustomOpts = {
+    entries: [paths.jsx],
+    transform: [babelify],
+    debug: true
+  };
+  var browserifyOpts = _.assign({}, watchify.args, browserifyCustomOpts);
+  var bundleStream = browserify(browserifyOpts);
+    var rebundle = function () {
+        var start = Date.now();
+        return bundleStream.bundle()
+          .on('error', notify.onError())
+          .pipe(source(paths.bundle))
+          .pipe(buffer())
+          .pipe(gulpif(!release,sourcemaps.init({loadMaps: true}))) // loads map from browserify file
+          .pipe(gulpif(release,uglify()))
+          .pipe(gulpif(!release,sourcemaps.write('./')))// writes .map file
+          .pipe(gulp.dest(paths.distJs))
+          .pipe(notify(function () {
+            console.log('APP bundle built in ' + (Date.now() - start) + 'ms');
+          }))
+          .pipe(gulpif(!release,reload({stream: true})));
+    }
+    bundleStream = watchify(bundleStream);
+    bundleStream.on('update', rebundle);
+    return rebundle();
 });
 
 gulp.task('styles', function() {
-  return gulp.src(p.scss)
-    .pipe(changed(p.distCss))
+  return gulp.src(paths.scss)
+    .pipe(changed(paths.distCss))
     .pipe(sass({errLogToConsole: true}))
     .on('error', notify.onError())
     .pipe(autoprefixer('last 1 version'))
     .pipe(csso())
-    .pipe(gulp.dest(p.distCss))
+    .pipe(gulp.dest(paths.distCss))
     .pipe(reload({stream: true}));
 });
 
@@ -84,7 +100,7 @@ gulp.task('lint', function() {
 });
 
 gulp.task('watchTask', function() {
-  gulp.watch(p.scss, ['styles']);
+  gulp.watch(paths.scss, ['styles']);
   gulp.watch('scripts/**/*.jsx', ['lint']);
 });
 
@@ -98,5 +114,11 @@ gulp.task('build', ['clean'], function() {
 });
 
 gulp.task('default', function() {
-  console.log('Run "gulp watch or gulp build"');
-});
+    runSequence(
+               'clean',
+                [ 'styles','lint'],
+                ['watchify','watchTask'],
+                ['serve']
+    );
+  }
+);
